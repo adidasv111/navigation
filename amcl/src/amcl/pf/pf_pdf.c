@@ -57,9 +57,13 @@ pf_pdf_gaussian_t *pf_pdf_gaussian_alloc(pf_vector_t x, pf_matrix_t cx)
   // Decompose the convariance matrix into a rotation
   // matrix and a diagonal matrix.
   pf_matrix_unitary(&pdf->cr, &cd, pdf->cx);
-  pdf->cd.v[0] = sqrt(cd.m[0][0]);
-  pdf->cd.v[1] = sqrt(cd.m[1][1]);
-  pdf->cd.v[2] = sqrt(cd.m[2][2]);
+
+  if (cd.m[0][0]<0 || cd.m[1][1]<0 || cd.m[2][2]<0)
+    printf("\x1B[31m AMCL: pf_pdf/pf_pdf_gaussian_alloc: Critical Error: Negative covariance value");
+
+  pdf->cd.v[0] = sqrt(fabs(cd.m[0][0]));
+  pdf->cd.v[1] = sqrt(fabs(cd.m[1][1]));
+  pdf->cd.v[2] = sqrt(fabs(cd.m[2][2]));
 
   // Initialize the random number generator
   //pdf->rng = gsl_rng_alloc(gsl_rng_taus);
@@ -86,7 +90,7 @@ double pf_pdf_gaussian_value(pf_pdf_gaussian_t *pdf, pf_vector_t x)
   int i, j;
   pf_vector_t z;
   double zz, p;
-  
+
   z = pf_vector_sub(x, pdf->x);
 
   zz = 0;
@@ -95,7 +99,7 @@ double pf_pdf_gaussian_value(pf_pdf_gaussian_t *pdf, pf_vector_t x)
       zz += z.v[i] * pdf->cxi.m[i][j] * z.v[j];
 
   p =  1 / (2 * M_PI * pdf->cxdet) * exp(-zz / 2);
-          
+
   return p;
 }
 */
@@ -120,8 +124,8 @@ pf_vector_t pf_pdf_gaussian_sample(pf_pdf_gaussian_t *pdf)
     x.v[i] = pdf->x.v[i];
     for (j = 0; j < 3; j++)
       x.v[i] += pdf->cr.m[i][j] * r.v[j];
-  } 
-  
+  }
+
   return x;
 }
 
@@ -165,7 +169,7 @@ pf_pdf_discrete_t *pf_pdf_discrete_alloc(int count, double *probs)
   pdf->prob_count = count;
   pdf->probs = malloc(count * sizeof(double));
   memcpy(pdf->probs, probs, count * sizeof(double));
-  
+
   // Initialize the random number generator
   pdf->rng = gsl_rng_alloc(gsl_rng_taus);
   gsl_rng_set(pdf->rng, ++pf_pdf_seed);
@@ -182,7 +186,7 @@ void pf_pdf_discrete_free(pf_pdf_discrete_t *pdf)
 {
   gsl_ran_discrete_free(pdf->ran);
   gsl_rng_free(pdf->rng);
-  free(pdf->probs);  
+  free(pdf->probs);
   free(pdf);
   return;
 }
@@ -199,7 +203,7 @@ double pf_pdf_discrete_value(pf_pdf_discrete_t *pdf, int i)
 int pf_pdf_discrete_sample(pf_pdf_discrete_t *pdf)
 {
   int i;
-  
+
   i = gsl_ran_discrete(pdf->rng, pdf->ran);
   assert(i >= 0 && i < pdf->prob_count);
 
