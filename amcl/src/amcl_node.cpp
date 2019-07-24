@@ -203,9 +203,11 @@ class AmclNode
     double pf_err_, pf_z_;
     bool pf_init_;
     pf_vector_t pf_odom_pose_;
+    pf_vector_t pf_odom_pose_chk_;
     double d_thresh_, a_thresh_;
     int resample_interval_;
     int resample_count_;
+    int skip_counter_;
     double laser_min_range_;
     double laser_max_range_;
 
@@ -233,6 +235,9 @@ class AmclNode
     bool getOdomPose(tf::Stamped<tf::Pose>& pose,
                      double& x, double& y, double& yaw,
                      const ros::Time& t, const std::string& f);
+
+    // Helper to check if odom has sudden change
+    bool checkOdomPose(tf::Stamped<tf::Pose>& pose, const std::string& f);
 
     //time for tolerance on the published transform,
     //basically defines how long a map->odom transform is good for
@@ -331,7 +336,8 @@ AmclNode::AmclNode() :
 	      private_nh_("~"),
         initial_pose_hyp_(NULL),
         first_map_received_(false),
-        first_reconfigure_call_(true)
+        first_reconfigure_call_(true),
+        skip_counter_(0)
 {
   boost::recursive_mutex::scoped_lock l(configuration_mutex_);
 
@@ -961,16 +967,55 @@ AmclNode::~AmclNode()
 }
 
 bool
+AmclNode::checkOdomPose(tf::Stamped<tf::Pose>& odom_pose, const std::string& f)
+{
+  // Get the robot's pose
+  tf::Stamped<tf::Pose> ident (tf::Transform(tf::createIdentityQuaternion(),
+                                           tf::Vector3(0,0,0)), ros::Time(0), f); //f = base_link
+  try
+  {
+    this->tf_->transformPose(odom_frame_id_, ident, odom_pose); // odom_frame_id_ = odom
+  }
+  catch(tf::TransformException e)
+  {
+    ROS_WARN("Failed to compute odom pose, skipping scan (%s)", e.what());
+    return false;
+  }
+  double x, y, yaw;
+  x = odom_pose.getOrigin().x();
+  y = odom_pose.getOrigin().y();
+  double pitch,roll;
+  odom_pose.getBasis().getEulerYPR(yaw, pitch, roll);
+  pf_vector_t delta;
+  delta.v[0] = x - pf_odom_pose_chk_.v[0];
+  delta.v[1] = y - pf_odom_pose_chk_.v[1];
+  delta.v[2] = angle_diff(yaw, pf_odom_pose_.v[2]);
+  pf_odom_pose_chk_.v[0] = x;
+  pf_odom_pose_chk_.v[1] = y;
+  pf_odom_pose_chk_.v[2] = yaw;
+  if (fabs(delta.v[0])<1.5 && fabs(delta.v[1])<1.5 && fabs(delta.v[1])<2.5)
+  {
+    return true;
+  }
+  else
+  {
+    return false;
+  }
+
+
+}
+
+bool
 AmclNode::getOdomPose(tf::Stamped<tf::Pose>& odom_pose,
                       double& x, double& y, double& yaw,
                       const ros::Time& t, const std::string& f)
 {
   // Get the robot's pose
   tf::Stamped<tf::Pose> ident (tf::Transform(tf::createIdentityQuaternion(),
-                                           tf::Vector3(0,0,0)), t, f);
+                                           tf::Vector3(0,0,0)), t, f); //f = base_link
   try
   {
-    this->tf_->transformPose(odom_frame_id_, ident, odom_pose);
+    this->tf_->transformPose(odom_frame_id_, ident, odom_pose); // odom_frame_id_ = odom
   }
   catch(tf::TransformException e)
   {
@@ -981,7 +1026,6 @@ AmclNode::getOdomPose(tf::Stamped<tf::Pose>& odom_pose,
   y = odom_pose.getOrigin().y();
   double pitch,roll;
   odom_pose.getBasis().getEulerYPR(yaw, pitch, roll);
-
   return true;
 }
 
@@ -1132,20 +1176,43 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
     delta.v[1] = pose.v[1] - pf_odom_pose_.v[1];
     delta.v[2] = angle_diff(pose.v[2], pf_odom_pose_.v[2]);
 
+    if(!checkOdomPose(latest_odom_pose_, base_frame_id_))
+    {
+      std::cout << "detect jump!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" << std::endl;
+      skip_counter_ = 40;
+    }
+
+    if(skip_counter_ > 0)
+    {
+      skip_counter_--;
+      // std::cout << "skip_counter: " << skip_counter_ << std::endl;
+    }
+
     // See if we should update the filter
-    bool update = fabs(delta.v[0]) > d_thresh_ ||
+    bool update = (fabs(delta.v[0]) > d_thresh_ ||
                   fabs(delta.v[1]) > d_thresh_ ||
-                  fabs(delta.v[2]) > a_thresh_;
+                  fabs(delta.v[2]) > a_thresh_);
+
+    // std::cout << "delta v0: " << delta.v[0]
+    //           << "\tdelta v1: " << delta.v[1]
+    //           << "\tdelta v2: "  << delta.v[2] << std::endl;
     // TODO: add timeout update
     end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = end_time - start_time;
 
-    if (static_cast<double>(diff.count()) > 2.0)
+    if (static_cast<double>(diff.count()) > 0.3)
     {
       timeout_force_update = true;
-      timeout_update_counter = 3;
+      timeout_update_counter = 1;
     }
-    update = update || m_force_update || timeout_force_update;
+    update = (update || m_force_update || timeout_force_update) && !skip_counter_;
+    // update = (update || m_force_update) && !skip_counter_;
+    // update = (update || m_force_update);
+    if (fabs(delta.v[0])>0.5 || fabs(delta.v[1])>0.5 || fabs(delta.v[2])>4)
+    {
+      pf_odom_pose_ = pose;
+      update = false;
+    }
     m_force_update=false;
 
     // update amcl_pose 5 time after timeout
@@ -1167,6 +1234,7 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
   {
     // Pose at last filter update
     pf_odom_pose_ = pose;
+    pf_odom_pose_chk_ = pose;
 
     // Filter is now initialized
     pf_init_ = true;
