@@ -230,24 +230,19 @@ namespace base_local_planner {
       footprint_spec_ = costmap_ros_->getRobotFootprint();
       footprint_spec_.clear();
       geometry_msgs::Point a1;
-      //a1.x = -0.37; a1.y = -0.34; a1.z = 0;
-      //a1.x = -0.3; a1.y = -0.3; a1.z = 0;
-      a1.x = -0.37; a1.y = -0.30; a1.z = 0;
+      a1.x = -0.35; a1.y = -0.30; a1.z = 0;
       footprint_spec_.push_back(a1);
+
       geometry_msgs::Point a2;
-      //a2.x = 0.37; a2.y = -0.34; a2.z = 0;
-      //a2.x = 0.3; a2.y = -0.3; a2.z = 0;
-      a2.x = 0.37; a2.y = -0.30; a2.z = 0;
+      a2.x = 0.35; a2.y = -0.30; a2.z = 0;
       footprint_spec_.push_back(a2);
+
       geometry_msgs::Point a3;
-      //a3.x = 0.37; a3.y = 0.34; a3.z = 0;
-      //a3.x = 0.3; a3.y = 0.3; a3.z = 0;
-      a3.x = 0.37; a3.y = 0.30; a3.z = 0;
+      a3.x = 0.35; a3.y = 0.30; a3.z = 0;
       footprint_spec_.push_back(a3);
+
       geometry_msgs::Point a4;
-      //a4.x = -0.37; a4.y = 0.34; a4.z = 0;
-      //a4.x = -0.3; a4.y = 0.3; a4.z = 0;
-      a4.x = -0.37; a4.y = 0.30; a4.z = 0;
+      a4.x = -0.35; a4.y = 0.30; a4.z = 0;
       footprint_spec_.push_back(a4);
 
       std::cout << "DWA footprint is :" << std::endl;
