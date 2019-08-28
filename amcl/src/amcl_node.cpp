@@ -215,10 +215,9 @@ class AmclNode
     bool m_force_update;  // used to temporarily let amcl update samples even when no motion occurs...
 
     // Timeout force publish
-    std::chrono::high_resolution_clock::time_point start_time;
-    std::chrono::high_resolution_clock::time_point end_time;
-    bool timeout_force_update;
-    int timeout_update_counter;
+    double timeout_;
+    std::chrono::high_resolution_clock::time_point last_publish_time;
+    bool timeout_reached;
 
     AMCLOdom* odom_;
     AMCLLaser* laser_;
@@ -435,6 +434,8 @@ AmclNode::AmclNode() :
     bag_scan_period_.fromSec(bag_scan_period);
   }
 
+  private_nh_.param("timeout", timeout_, 0.3);
+
   updatePoseFromServer();
 
   cloud_pub_interval.fromSec(1.0);
@@ -466,10 +467,8 @@ AmclNode::AmclNode() :
     requestMap();
   }
   m_force_update = false;
-  timeout_force_update = false;
-  timeout_update_counter = 0;
-  start_time = std::chrono::high_resolution_clock::now();
-  end_time  = std::chrono::high_resolution_clock::now();
+  timeout_reached = false;
+  last_publish_time = std::chrono::high_resolution_clock::now();
 
   dsrv_ = new dynamic_reconfigure::Server<amcl::AMCLConfig>(ros::NodeHandle("~"));
   dynamic_reconfigure::Server<amcl::AMCLConfig>::CallbackType cb = boost::bind(&AmclNode::reconfigureCB, this, _1, _2);
@@ -1185,7 +1184,6 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
     if(skip_counter_ > 0)
     {
       skip_counter_--;
-      // std::cout << "skip_counter: " << skip_counter_ << std::endl;
     }
 
     // See if we should update the filter
@@ -1195,33 +1193,25 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
 
     // std::cout << "delta v0: " << delta.v[0]
     //           << "\tdelta v1: " << delta.v[1]
-    //           << "\tdelta v2: "  << delta.v[2] << std::endl;
-    // TODO: add timeout update
-    end_time = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> diff = end_time - start_time;
+    //           << "\tdelta v2: "  << delta.v[2] << std::endl;'
 
-    if (static_cast<double>(diff.count()) > 0.3)
+    // time since last call
+    std::chrono::duration<double> diff_time = std::chrono::high_resolution_clock::now() - last_publish_time;
+    if ((diff_time).count() > timeout_)
     {
-      timeout_force_update = true;
-      timeout_update_counter = 1;
+      timeout_reached = true;
     }
-    update = (update || m_force_update || timeout_force_update) && !skip_counter_;
-    // update = (update || m_force_update) && !skip_counter_;
+
+    // update = (update || m_force_update || timeout_reached) && !skip_counter_;
+    update = (update || m_force_update) && !skip_counter_;
     // update = (update || m_force_update);
+
     if (fabs(delta.v[0])>0.5 || fabs(delta.v[1])>0.5 || fabs(delta.v[2])>4)
     {
       pf_odom_pose_ = pose;
       update = false;
     }
     m_force_update=false;
-
-    // update amcl_pose 5 time after timeout
-    if (timeout_update_counter != 0)
-    {
-      timeout_update_counter --;
-    } else {
-      timeout_force_update = false;
-    }
 
     // Set the laser update flags
     if(update)
@@ -1332,6 +1322,8 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
               (i * angle_increment);
     }
 
+    std::cout << "update" << std::endl;
+
     lasers_[laser_index]->UpdateSensor(pf_, (AMCLSensorData*)&ldata);
 
     lasers_update_[laser_index] = false;
@@ -1366,8 +1358,9 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
     }
   }
 
-  // Update amcl_pose
-  if(resampled || force_publication)
+  // Publish amcl_pose
+  // if(resampled || force_publication)
+  if(resampled || force_publication || timeout_reached)
   {
     // Read out the current hypotheses
     double max_weight = 0.0;
@@ -1447,8 +1440,7 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
        */
 
       pose_pub_.publish(p);
-      // time since last publish of amcl_pose
-      start_time = std::chrono::high_resolution_clock::now();
+      last_publish_time = std::chrono::high_resolution_clock::now();
 
       last_published_pose = p;
 
@@ -1524,6 +1516,10 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
     }
   }
 
+  if (timeout_reached)
+  {
+    timeout_reached = false;
+  }
 }
 
 double
