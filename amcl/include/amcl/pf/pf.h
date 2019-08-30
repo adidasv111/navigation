@@ -134,6 +134,8 @@ typedef struct _pf_t
 
   double dist_threshold; //distance threshold in each axis over which the pf is considered to not be converged
   int converged;
+
+  int selective_resampling;
 } pf_t;
 
 
@@ -141,6 +143,8 @@ typedef struct _pf_t
 pf_t *pf_alloc(int min_samples, int max_samples,
                double alpha_slow, double alpha_fast,
                pf_init_model_fn_t random_pose_fn, void *random_pose_data);
+
+void pf_set_selective_resampling(pf_t *pf, int selective_resampling);
 
 // Free an existing filter
 void pf_free(pf_t *pf);

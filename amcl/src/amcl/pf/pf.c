@@ -110,6 +110,11 @@ pf_t *pf_alloc(int min_samples, int max_samples,
   return pf;
 }
 
+void pf_set_selective_resampling(pf_t *pf, int selective_resampling)
+{
+  pf->selective_resampling = selective_resampling;
+}
+
 // Free an existing filter
 void pf_free(pf_t *pf)
 {
@@ -373,19 +378,22 @@ void pf_update_resample(pf_t *pf)
 
   printf("reasmple neff: %f , N: %d\n", (pf->sets + pf->current_set)->n_effective, (pf->sets + pf->current_set)->sample_count);
 
-  if ((pf->sets + pf->current_set)->n_effective > 0.5*(pf->sets + pf->current_set)->sample_count)
+  if (pf->selective_resampling != 0)
   {
-    printf("skip resample\n");
+    if ((pf->sets + pf->current_set)->n_effective > 0.5*(pf->sets + pf->current_set)->sample_count)
+    {
+      printf("skip resample\n");
 
-    // copy set a to b
-    copy_set(set_a,set_b);
+      // copy set a to b
+      copy_set(set_a,set_b);
 
-    // Re-compute cluster statistics
-    pf_cluster_stats(pf, set_b);
+      // Re-compute cluster statistics
+      pf_cluster_stats(pf, set_b);
 
-    // Use the newly created sample set
-    pf->current_set = (pf->current_set + 1) % 2;
-    return;
+      // Use the newly created sample set
+      pf->current_set = (pf->current_set + 1) % 2;
+      return;
+    }
   }
   printf("resample\n");
 
