@@ -105,6 +105,7 @@ typedef struct _pf_sample_set_t
   pf_matrix_t cov;
   int converged;
   double n_effective;
+  double model_hit_metric;
 } pf_sample_set_t;
 
 

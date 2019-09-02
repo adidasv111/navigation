@@ -355,6 +355,7 @@ void copy_set(pf_sample_set_t* set_a, pf_sample_set_t* set_b)
   }
 
   set_b->converged = set_a->converged;
+  set_b->model_hit_metric = set_a->model_hit_metric;
 }
 
 
@@ -376,14 +377,10 @@ void pf_update_resample(pf_t *pf)
   set_a = pf->sets + pf->current_set;
   set_b = pf->sets + (pf->current_set + 1) % 2;
 
-  printf("reasmple neff: %f , N: %d\n", (pf->sets + pf->current_set)->n_effective, (pf->sets + pf->current_set)->sample_count);
-
   if (pf->selective_resampling != 0)
   {
     if ((pf->sets + pf->current_set)->n_effective > 0.5*(pf->sets + pf->current_set)->sample_count)
     {
-      printf("skip resample\n");
-
       // copy set a to b
       copy_set(set_a,set_b);
 
@@ -395,7 +392,6 @@ void pf_update_resample(pf_t *pf)
       return;
     }
   }
-  printf("resample\n");
 
   // Build up cumulative probability table for resampling.
   // TODO: Replace this with a more efficient procedure
@@ -508,6 +504,8 @@ void pf_update_resample(pf_t *pf)
   pf->current_set = (pf->current_set + 1) % 2;
 
   pf_update_converged(pf);
+
+  set_b->model_hit_metric = set_a->model_hit_metric;
 
   free(c);
   return;

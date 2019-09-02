@@ -275,6 +275,7 @@ class AmclNode
     laser_model_t laser_model_type_;
     bool tf_broadcast_;
     bool selective_resampling_;
+    bool modulate_covariance_;
 
     void reconfigureCB(amcl::AMCLConfig &config, uint32_t level);
 
@@ -364,6 +365,7 @@ AmclNode::AmclNode() :
   private_nh_.param("odom_alpha4", alpha4_, 0.2);
   private_nh_.param("odom_alpha5", alpha5_, 0.2);
   private_nh_.param("selective_resampling", selective_resampling_, false);
+  private_nh_.param("modulate_covariance", modulate_covariance_, false);
 
   private_nh_.param("do_beamskip", do_beamskip_, false);
   private_nh_.param("beam_skip_distance", beam_skip_distance_, 0.5);
@@ -1328,8 +1330,6 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
               (i * angle_increment);
     }
 
-    std::cout << "update" << std::endl;
-
     lasers_[laser_index]->UpdateSensor(pf_, (AMCLSensorData*)&ldata);
 
     lasers_update_[laser_index] = false;
@@ -1434,7 +1434,6 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
       // covariance for the highest-weight cluster
       //p.covariance[6*5+5] = hyps[max_weight_hyp].pf_pose_cov.m[2][2];
       p.pose.covariance[6*5+5] = set->cov.m[2][2];
-
       /*
          printf("cov:\n");
          for(int i=0; i<6; i++)
@@ -1444,6 +1443,15 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
          puts("");
          }
        */
+
+      if (modulate_covariance_)
+      {
+        double model_hit_metric = set->model_hit_metric + 0.00001;
+        for(int i=0; i<36; i++)
+        {
+          p.pose.covariance[i] /= model_hit_metric;
+        }
+      }
 
       pose_pub_.publish(p);
       last_publish_time = std::chrono::high_resolution_clock::now();
