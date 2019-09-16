@@ -215,10 +215,9 @@ class AmclNode
     bool m_force_update;  // used to temporarily let amcl update samples even when no motion occurs...
 
     // Timeout force publish
-    std::chrono::high_resolution_clock::time_point start_time;
-    std::chrono::high_resolution_clock::time_point end_time;
-    bool timeout_force_update;
-    int timeout_update_counter;
+    double timeout_;
+    std::chrono::high_resolution_clock::time_point last_publish_time;
+    bool timeout_reached;
 
     AMCLOdom* odom_;
     AMCLLaser* laser_;
@@ -275,6 +274,8 @@ class AmclNode
     double init_cov_[3];
     laser_model_t laser_model_type_;
     bool tf_broadcast_;
+    bool selective_resampling_;
+    bool modulate_covariance_;
 
     void reconfigureCB(amcl::AMCLConfig &config, uint32_t level);
 
@@ -363,6 +364,8 @@ AmclNode::AmclNode() :
   private_nh_.param("odom_alpha3", alpha3_, 0.2);
   private_nh_.param("odom_alpha4", alpha4_, 0.2);
   private_nh_.param("odom_alpha5", alpha5_, 0.2);
+  private_nh_.param("selective_resampling", selective_resampling_, false);
+  private_nh_.param("modulate_covariance", modulate_covariance_, false);
 
   private_nh_.param("do_beamskip", do_beamskip_, false);
   private_nh_.param("beam_skip_distance", beam_skip_distance_, 0.5);
@@ -435,6 +438,8 @@ AmclNode::AmclNode() :
     bag_scan_period_.fromSec(bag_scan_period);
   }
 
+  private_nh_.param("timeout", timeout_, 0.3);
+
   updatePoseFromServer();
 
   cloud_pub_interval.fromSec(1.0);
@@ -466,10 +471,8 @@ AmclNode::AmclNode() :
     requestMap();
   }
   m_force_update = false;
-  timeout_force_update = false;
-  timeout_update_counter = 0;
-  start_time = std::chrono::high_resolution_clock::now();
-  end_time  = std::chrono::high_resolution_clock::now();
+  timeout_reached = false;
+  last_publish_time = std::chrono::high_resolution_clock::now();
 
   dsrv_ = new dynamic_reconfigure::Server<amcl::AMCLConfig>(ros::NodeHandle("~"));
   dynamic_reconfigure::Server<amcl::AMCLConfig>::CallbackType cb = boost::bind(&AmclNode::reconfigureCB, this, _1, _2);
@@ -564,6 +567,8 @@ void AmclNode::reconfigureCB(AMCLConfig &config, uint32_t level)
                  alpha_slow_, alpha_fast_,
                  (pf_init_model_fn_t)AmclNode::uniformPoseGenerator,
                  (void *)map_);
+  pf_set_selective_resampling(pf_, selective_resampling_);
+
   pf_err_ = config.kld_err;
   pf_z_ = config.kld_z;
   pf_->pop_err = pf_err_;
@@ -856,6 +861,8 @@ AmclNode::handleMapMessage(const nav_msgs::OccupancyGrid& msg)
                  alpha_slow_, alpha_fast_,
                  (pf_init_model_fn_t)AmclNode::uniformPoseGenerator,
                  (void *)map_);
+  pf_set_selective_resampling(pf_, selective_resampling_);
+
   pf_->pop_err = pf_err_;
   pf_->pop_z = pf_z_;
 
@@ -1185,7 +1192,6 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
     if(skip_counter_ > 0)
     {
       skip_counter_--;
-      // std::cout << "skip_counter: " << skip_counter_ << std::endl;
     }
 
     // See if we should update the filter
@@ -1195,33 +1201,25 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
 
     // std::cout << "delta v0: " << delta.v[0]
     //           << "\tdelta v1: " << delta.v[1]
-    //           << "\tdelta v2: "  << delta.v[2] << std::endl;
-    // TODO: add timeout update
-    end_time = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> diff = end_time - start_time;
+    //           << "\tdelta v2: "  << delta.v[2] << std::endl;'
 
-    if (static_cast<double>(diff.count()) > 0.3)
+    // time since last call
+    std::chrono::duration<double> diff_time = std::chrono::high_resolution_clock::now() - last_publish_time;
+    if ((diff_time).count() > timeout_)
     {
-      timeout_force_update = true;
-      timeout_update_counter = 1;
+      timeout_reached = true;
     }
-    update = (update || m_force_update || timeout_force_update) && !skip_counter_;
-    // update = (update || m_force_update) && !skip_counter_;
+
+    // update = (update || m_force_update || timeout_reached) && !skip_counter_;
+    update = (update || m_force_update) && !skip_counter_;
     // update = (update || m_force_update);
+
     if (fabs(delta.v[0])>0.5 || fabs(delta.v[1])>0.5 || fabs(delta.v[2])>4)
     {
       pf_odom_pose_ = pose;
       update = false;
     }
     m_force_update=false;
-
-    // update amcl_pose 5 time after timeout
-    if (timeout_update_counter != 0)
-    {
-      timeout_update_counter --;
-    } else {
-      timeout_force_update = false;
-    }
 
     // Set the laser update flags
     if(update)
@@ -1366,8 +1364,9 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
     }
   }
 
-  // Update amcl_pose
-  if(resampled || force_publication)
+  // Publish amcl_pose
+  // if(resampled || force_publication)
+  if(resampled || force_publication || timeout_reached)
   {
     // Read out the current hypotheses
     double max_weight = 0.0;
@@ -1435,7 +1434,6 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
       // covariance for the highest-weight cluster
       //p.covariance[6*5+5] = hyps[max_weight_hyp].pf_pose_cov.m[2][2];
       p.pose.covariance[6*5+5] = set->cov.m[2][2];
-
       /*
          printf("cov:\n");
          for(int i=0; i<6; i++)
@@ -1446,9 +1444,17 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
          }
        */
 
+      if (modulate_covariance_)
+      {
+        double model_hit_metric = set->model_hit_metric + 0.00001;
+        for(int i=0; i<36; i++)
+        {
+          p.pose.covariance[i] /= model_hit_metric;
+        }
+      }
+
       pose_pub_.publish(p);
-      // time since last publish of amcl_pose
-      start_time = std::chrono::high_resolution_clock::now();
+      last_publish_time = std::chrono::high_resolution_clock::now();
 
       last_published_pose = p;
 
@@ -1524,6 +1530,10 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
     }
   }
 
+  if (timeout_reached)
+  {
+    timeout_reached = false;
+  }
 }
 
 double
